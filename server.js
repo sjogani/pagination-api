@@ -1,24 +1,37 @@
 const express = require('express');
 const { sequelize, Feed, User } = require('./models');
-const redis = require('redis'); // Redis client
-require('dotenv').config(); // Load environment variables
+const redis = require('redis');
+require('dotenv').config();
 
 const app = express();
 const PORT = 3000;
 
 // Setup Redis Client
 const redisClient = redis.createClient({
-    host: process.env.REDIS_HOST || '127.0.0.1',
-    port: process.env.REDIS_PORT || 6379,
+    socket: {
+        host: process.env.REDIS_HOST || '127.0.0.1',
+        port: process.env.REDIS_PORT || 6379,
+    },
 });
 
 redisClient.on('error', (err) => console.error('Redis Error:', err));
+
+(async () => {
+    try {
+        await redisClient.connect();
+        console.log('✅ Redis Connected Successfully!');
+    } catch (err) {
+        console.error('❌ Redis Connection Error:', err);
+    }
+})();
 
 app.use(express.json());
 
 // Pagination API Route: GET /api/feed
 app.get('/api/feed', async (req, res) => {
     try {
+        console.log('🔹 Received request to /api/feed');
+
         let { page = 1, limit = 10 } = req.query;
         page = parseInt(page);
         limit = parseInt(limit);
@@ -29,57 +42,66 @@ app.get('/api/feed', async (req, res) => {
         const offset = (page - 1) * limit;
         const cacheKey = `feed:${page}:${limit}`;
 
+        console.log(`🔹 Checking Redis Cache for key: ${cacheKey}`);
+
         // Check Redis Cache
-        redisClient.get(cacheKey, async (err, cachedData) => {
-            if (err) console.error('Redis Error:', err);
+        const cachedData = await redisClient.get(cacheKey);
+        if (cachedData) {
+            console.log('✅ Cache Hit:', cacheKey);
+            return res.json(JSON.parse(cachedData));
+        }
 
-            if (cachedData) {
-                console.log('Cache Hit:', cacheKey);
-                return res.json(JSON.parse(cachedData));
-            }
+        console.log('❌ Cache Miss:', cacheKey);
 
-            console.log('Cache Miss:', cacheKey);
-
-            // Fetch paginated feed data with user details
-            const { count, rows } = await Feed.findAndCountAll({
-                limit,
-                offset,
-                order: [['createdAt', 'DESC']],
-                include: [
-                    {
-                        model: User,
-                        attributes: ['username', 'profile_picture_url'],
-                    },
-                ],
-            });
-
-            const formattedPosts = rows.map(feed => ({
-                post_id: feed.id,
-                content: feed.content,
-                created_at: feed.createdAt,
-                username: feed.User.username,
-                profile_picture_url: feed.User.profile_picture_url,
-            }));
-
-            const responseData = {
-                success: true,
-                data: {
-                    posts: formattedPosts,
-                    pagination: {
-                        limit,
-                        page,
-                        total: count,
-                    },
+        // Fetch paginated feed data
+        console.log('🔹 Querying database for feed data...');
+        const { count, rows } = await Feed.findAndCountAll({
+            limit,
+            offset,
+            order: [['createdAt', 'DESC']],
+            include: [
+                {
+                    model: User,
+                    attributes: ['username', 'profile_picture_url'],
                 },
-            };
-
-            // Store response in Redis (TTL = 300 seconds / 5 min)
-            redisClient.setex(cacheKey, 300, JSON.stringify(responseData));
-
-            res.json(responseData);
+            ],
         });
+
+        console.log(`✅ Database Query Complete. Found ${rows.length} rows.`);
+
+        if (rows.length === 0) {
+            console.log('❌ No feed data found.');
+            return res.status(404).json({ success: false, message: 'No feed data found' });
+        }
+
+        const formattedPosts = rows.map(feed => ({
+            post_id: feed.id,
+            content: feed.content,
+            created_at: feed.createdAt,
+            username: feed.User.username,
+            profile_picture_url: feed.User.profile_picture_url,
+        }));
+
+        const responseData = {
+            success: true,
+            data: {
+                posts: formattedPosts,
+                pagination: {
+                    limit,
+                    page,
+                    total: count,
+                },
+            },
+        };
+
+        // Store response in Redis (TTL = 300 seconds / 5 min)
+        console.log('🔹 Storing response in Redis...');
+        await redisClient.setEx(cacheKey, 300, JSON.stringify(responseData));
+
+        console.log('✅ Response stored in Redis. Sending response to client.');
+        res.json(responseData);
     } catch (error) {
-        console.error(error);
+        console.error('❌ Error in /api/feed:', error);
         res.status(500).json({ success: false, error: 'Internal Server Error' });
     }
 });
@@ -88,10 +110,10 @@ app.get('/api/feed', async (req, res) => {
 app.listen(PORT, async () => {
     try {
         await sequelize.authenticate();
-        console.log('MySQL Database connected!');
-        await sequelize.sync(); // Sync tables
-        console.log(`Server is running on http://localhost:${PORT}`);
+        console.log('✅ MySQL Database connected!');
+        await sequelize.sync();
+        console.log(`🚀 Server is running on http://localhost:${PORT}`);
     } catch (error) {
-        console.error('Database connection failed:', error);
+        console.error('❌ Database connection failed:', error);
     }
 });
