@@ -27,6 +27,9 @@ redisClient.on('error', (err) => console.error('Redis Error:', err));
 
 app.use(express.json());
 
+// Import cron jobs
+require('./cronJobs');  // ✅ Add this here to start cron jobs
+
 // Pagination API Route: GET /api/feed
 app.get('/api/feed', async (req, res) => {
     try {

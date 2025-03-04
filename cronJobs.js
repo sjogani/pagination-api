@@ -1,13 +1,26 @@
 const cron = require('node-cron');
-const { sequelize, Feed, User } = require('./models');
-const redisClient = require('./redisClient'); // Create a separate Redis client file if needed
+const redis = require('redis');
+const { Feed, User } = require('./models');
 
-// Function to prefetch popular feed pages
-async function prefetchFeedData() {
-    console.log('🔄 Running prefetchFeedData job...');
+const redisClient = redis.createClient({
+    host: process.env.REDIS_HOST || '127.0.0.1',
+    port: process.env.REDIS_PORT || 6379,
+});
+
+redisClient.on('error', (err) => console.error('Redis Error in Cron Jobs:', err));
+redisClient.on('connect', () => console.log('✅ Redis Connected for Cron Jobs!'));
+
+// Ensure Redis client is connected properly
+(async () => {
+    await redisClient.connect();
+})();
+
+// 🕒 Cron Job: Prefetch feed data every 10 minutes
+cron.schedule('*/10 * * * *', async () => {
+    console.log('🔄 [Cron] Prefetching feed data...');
 
     try {
-        const page = 1;
+        const page = 1; // Prefetch only the first page
         const limit = 10;
         const offset = (page - 1) * limit;
         const cacheKey = `feed:${page}:${limit}`;
@@ -30,33 +43,32 @@ async function prefetchFeedData() {
 
         const responseData = {
             success: true,
-            data: { posts: formattedPosts, pagination: { limit, page, total: count } },
+            data: {
+                posts: formattedPosts,
+                pagination: { limit, page, total: count },
+            },
         };
 
-        // Store in Redis (TTL = 300s / 5 min)
-        redisClient.setex(cacheKey, 300, JSON.stringify(responseData));
-        console.log('✅ Cached fresh feed data:', cacheKey);
-    } catch (error) {
-        console.error('❌ Error in prefetchFeedData:', error);
-    }
-}
+        // ✅ FIX: Use `setEx` instead of `setex`
+        await redisClient.setEx(cacheKey, 300, JSON.stringify(responseData));
 
-// Function to clear old cache entries
-async function clearOldCache() {
-    console.log('🗑 Running cache cleanup job...');
+        console.log(`✅ [Cron] Prefetched and cached feed:${page}:${limit}`);
+    } catch (error) {
+        console.error('❌ [Cron] Error prefetching feed data:', error);
+    }
+});
+
+// 🗑️ Cron Job: Clear old cache every day at 3 AM
+cron.schedule('0 3 * * *', async () => {
+    console.log('🗑️ [Cron] Clearing old cache...');
 
     try {
-        redisClient.flushdb((err, success) => {
-            if (err) console.error('❌ Redis Cleanup Error:', err);
-            if (success) console.log('✅ Redis cache cleared!');
-        });
+        // Flush all Redis cache (Careful! This clears everything)
+        await redisClient.flushAll();
+        console.log('✅ [Cron] Cache cleared successfully!');
     } catch (error) {
-        console.error('❌ Error in clearOldCache:', error);
+        console.error('❌ [Cron] Error while clearing cache:', error);
     }
-}
+});
 
-// Schedule the cron jobs
-cron.schedule('*/10 * * * *', prefetchFeedData); // Every 10 minutes
-cron.schedule('0 3 * * *', clearOldCache); // Every day at 3 AM
-
-module.exports = { prefetchFeedData, clearOldCache };
+console.log('✅ Cron Jobs Initialized!');
