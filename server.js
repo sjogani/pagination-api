@@ -1,10 +1,10 @@
 const express = require('express');
-const { sequelize, Feed } = require('./models');  // Import database & model
+const { sequelize, Feed, User } = require('./models');
 
 const app = express();
 const PORT = 3000;
 
-app.use(express.json());  // Middleware to parse JSON
+app.use(express.json());
 
 // Pagination API Route: GET /api/feed
 app.get('/api/feed', async (req, res) => {
@@ -18,23 +18,42 @@ app.get('/api/feed', async (req, res) => {
 
         const offset = (page - 1) * limit;
 
-        // Fetch paginated data from MySQL
+        // Fetch paginated feed data with user details
         const { count, rows } = await Feed.findAndCountAll({
             limit,
             offset,
-            order: [['createdAt', 'DESC']], // Sort by newest first
+            order: [['createdAt', 'DESC']],
+            include: [
+                {
+                    model: User,
+                    attributes: ['username', 'profile_picture_url'],
+                },
+            ],
         });
 
+        // Format response as required
+        const formattedPosts = rows.map(feed => ({
+            post_id: feed.id,
+            content: feed.content,
+            created_at: feed.createdAt,
+            username: feed.User.username,
+            profile_picture_url: feed.User.profile_picture_url,
+        }));
+
         res.json({
-            totalRecords: count,
-            totalPages: Math.ceil(count / limit),
-            currentPage: page,
-            perPage: limit,
-            data: rows,
+            success: true,
+            data: {
+                posts: formattedPosts,
+                pagination: {
+                    limit,
+                    page,
+                    total: count,
+                },
+            },
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: 'Internal Server Error' });
+        res.status(500).json({ success: false, error: 'Internal Server Error' });
     }
 });
 
