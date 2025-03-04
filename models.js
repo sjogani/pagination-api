@@ -1,15 +1,27 @@
 const { DataTypes } = require('sequelize');
-const sequelize = require('./config');  // Import database connection
+const sequelize = require('./config');
 
-const Feed = sequelize.define('Feed', {
-    title: {
+// User Model
+const User = sequelize.define('User', {
+    username: {
         type: DataTypes.STRING,
         allowNull: false,
     },
+    profile_picture_url: {
+        type: DataTypes.STRING,
+    },
+}, { timestamps: true });
+
+// Feed Model
+const Feed = sequelize.define('Feed', {
     content: {
         type: DataTypes.TEXT,
         allowNull: false,
     },
 }, { timestamps: true });
 
-module.exports = { sequelize, Feed };
+// Define Relationships
+User.hasMany(Feed, { foreignKey: 'user_id' });
+Feed.belongsTo(User, { foreignKey: 'user_id' });
+
+module.exports = { sequelize, User, Feed };
